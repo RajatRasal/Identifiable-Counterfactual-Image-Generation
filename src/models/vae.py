@@ -70,24 +70,7 @@ def loss_function(recon_x, x, mu, logvar):
     return recon_loss + kl_loss
 
 
-def infonce_loss(z1, z2, temperature=0.1):
-    """
-    Compute InfoNCE loss between two batches of latent codes.
-    Assumes z1 and z2 have shape [batch_size, latent_dim].
-    """
-    # Normalize latent vectors
-    z1_norm = F.normalize(z1, dim=1)
-    z2_norm = F.normalize(z2, dim=1)
-    # Compute cosine similarity matrix
-    logits = torch.matmul(z1_norm, z2_norm.t()) / temperature
-    batch_size = z1.size(0)
-    # Positive samples are on the diagonal.
-    labels = torch.arange(batch_size, device=z1.device)
-    loss = F.cross_entropy(logits, labels, reduction="sum")
-    return loss
-
-
-def differential_entropy(z: torch.Tensor, reduction: str = "none") -> torch.Tensor:
+def entropy(z: torch.Tensor, reduction: str = "none") -> torch.Tensor:
     """
     Compute entropy of embeddings efficiently with reduction options.
 
@@ -101,13 +84,10 @@ def differential_entropy(z: torch.Tensor, reduction: str = "none") -> torch.Tens
     Returns:
         torch.Tensor: Entropy value(s) based on the reduction mode.
     """
-    # Compute log-softmax directly for numerical stability
+    # Compute log-softmax for numerical stability: log_probs = log(p)
     log_probs = F.log_softmax(z, dim=-1)
-
-    # Compute entropy using in-place exponentiation and summation
-    entropy = -torch.sum(
-        log_probs.exp() * log_probs, dim=-1
-    )  # In-place exp_() for efficiency
+    # Compute entropy: -sum(p * log(p)) along the last dimension
+    entropy = -torch.sum(log_probs.exp() * log_probs, dim=-1)
 
     # Apply reduction
     if reduction == "mean":

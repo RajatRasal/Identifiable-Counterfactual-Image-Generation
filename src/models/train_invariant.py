@@ -12,7 +12,7 @@ from torchvision import transforms, utils
 from datasets.mnist import PairedColourMNIST
 from models.ema import EMA
 from models.utils import get_next_log_dir, seed_everything
-from models.vae import VAE, compute_loss_components, differential_entropy
+from models.vae import VAE, compute_loss_components, entropy
 
 
 def train(model, ema, device, train_loader, optimizer, epoch, writer):
@@ -31,8 +31,11 @@ def train(model, ema, device, train_loader, optimizer, epoch, writer):
         recon_batch, z1, mu, logvar = model(data1)
         recon_loss, kl_loss = compute_loss_components(recon_batch, data1, mu, logvar)
         z2 = model.reparameterize(*model.encode(data2))
+        c_dim = z1.shape[1] // 2
+        z1 = z1[:, :c_dim]
+        z2 = z2[:, :c_dim]
         align = F.mse_loss(z1, z2, reduction="mean")
-        ent = differential_entropy(z1, "mean")
+        ent = entropy(z1, "mean")
         loss = recon_loss + kl_loss + align + ent
         loss.backward()
         optimizer.step()
@@ -77,11 +80,13 @@ def train(model, ema, device, train_loader, optimizer, epoch, writer):
 
 def evaluate(model, ema, device, loader, epoch, writer, tag="Validation"):
     model.eval()
+
     total_loss = 0
     total_recon = 0
     total_kl = 0
     total_align = 0
     total_ent = 0
+
     with ema:
         with torch.no_grad():
             for batch_idx, (data1, data2, _) in enumerate(loader):
@@ -92,13 +97,19 @@ def evaluate(model, ema, device, loader, epoch, writer, tag="Validation"):
                     recon_batch, data1, mu, logvar
                 )
                 z2 = model.reparameterize(*model.encode(data2))
+                c_dim = z1.shape[1] // 2
+                z1 = z1[:, :c_dim]
+                z2 = z2[:, :c_dim]
                 align = F.mse_loss(z1, z2, reduction="mean")
-                ent = differential_entropy(z1, "mean")
-                recon_loss + kl_loss + align + ent
+                ent = entropy(z1, "mean")
+                loss = recon_loss + kl_loss + align + ent
+
+                total_loss += loss.item()
                 total_recon += recon_loss.item()
                 total_kl += kl_loss.item()
                 total_align += align.item()
                 total_ent += ent.item()
+
                 if batch_idx == 0:
                     n = min(data1.size(0), 8)
                     # Log a grid of original vs. reconstruction images to TensorBoard
@@ -110,6 +121,7 @@ def evaluate(model, ema, device, loader, epoch, writer, tag="Validation"):
                         ),
                         epoch,
                     )
+
         avg_loss = total_loss / len(loader.dataset)
         avg_recon = total_recon / len(loader.dataset)
         avg_kl = total_kl / len(loader.dataset)
