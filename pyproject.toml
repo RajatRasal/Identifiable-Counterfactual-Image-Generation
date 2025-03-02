@@ -9,7 +9,8 @@ packages = [
 ]
 
 [tool.poetry.scripts]
-vae_train = "models.vae:main"
+vae_train = "models.train:main"
+vae_train_invariant = "models.train_invariant:main"
 
 [tool.poetry.dependencies]
 python = "3.12.0"
@@ -68,8 +69,3 @@ exclude = '''
   | data
 )/
 '''
-
-[tool.isort]
-profile = "black"
-line_length = 88
-known_first_party = ["models", "datasets"]
