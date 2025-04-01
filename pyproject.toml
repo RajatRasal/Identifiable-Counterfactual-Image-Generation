@@ -5,12 +5,12 @@ description = ""
 authors = ["Your Name <your.email@example.com>"]
 license = "MIT"
 packages = [
-    { include = "models", from = "src" }
+    { include = "models", from = "src" },
 ]
 
 [tool.poetry.scripts]
-vae_train = "models.train:main"
-vae_train_invariant = "models.train_invariant:main"
+slotae_train = "models.slot_attention.train:train"
+slate_train = "models.slate.train:train"
 
 [tool.poetry.dependencies]
 python = "3.12.0"
@@ -27,6 +27,11 @@ tensorboard = "2.17.0"
 jupyter = "1.1.1"
 seaborn = "0.13.2"
 python-dotenv = "1.0.1"
+ema-pytorch = "0.7.7"
+blobfile = "3.0.0"
+torchmetrics = {version = "1.6.3", extras = ["image"]}
+wandb = "0.19.8"
+h5py = "3.13.0"
 
 [tool.poetry.group.gpu]
 optional = true

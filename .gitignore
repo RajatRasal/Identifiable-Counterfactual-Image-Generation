@@ -2,3 +2,5 @@
 __pycache__
 runs
 data
+experiments/
+slurm_logs/

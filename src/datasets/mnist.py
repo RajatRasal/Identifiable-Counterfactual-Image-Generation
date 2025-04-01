@@ -16,7 +16,7 @@ def set_hue_and_saturation(
     return np.clip(hsv_to_rgb(hsv_image) * 255.0, 0, 255).astype(np.uint8)
 
 
-def sample_hue(label: int, sigma: float, p: float) -> float:
+def sample_hue(label: int, sigma: float, p: float, flip_hue: bool) -> float:
     # Sample the binary variable b ~ Bernoulli(p)
     b = torch.bernoulli(torch.tensor([p])).item()  # returns 0.0 or 1.0
     if b == 0:
@@ -26,12 +26,21 @@ def sample_hue(label: int, sigma: float, p: float) -> float:
     else:
         # Else: hue ~ Uniform(0, 1)
         hue = torch.rand(1).item()
+    if flip_hue:
+        hue = 1 - hue
     hue = max(0.0, min(1.0, hue))  # ensure hue in [0, 1]
     return hue
 
 
 class ColourMNIST(datasets.MNIST):
-    def __init__(self, *args, sigma: float = 0.05, p: float = 0.01, **kwargs):
+    def __init__(
+        self,
+        *args,
+        sigma: float = 0.05,
+        p: float = 0.01,
+        flip_hue: bool = False,
+        **kwargs,
+    ):
         """
         Args:
             sigma (float): Standard deviation for Normal distribution.
@@ -40,12 +49,13 @@ class ColourMNIST(datasets.MNIST):
         super().__init__(*args, **kwargs)
         self.sigma = torch.tensor(sigma)
         self.p = p
+        self.flip_hue = flip_hue
 
     def _colourise(self, img: torch.tensor, label: torch.tensor) -> Image:
         img = img.numpy()
 
         # Sample a value for hue in range [0, 1]
-        hue = sample_hue(int(label), self.sigma, self.p)
+        hue = sample_hue(int(label), self.sigma, self.p, self.flip_hue)
 
         # Set hue and return image in range [0, 1]
         img = np.repeat(
@@ -56,7 +66,7 @@ class ColourMNIST(datasets.MNIST):
         img = set_hue_and_saturation(img, hue)
         img = Image.fromarray(img, mode="RGB")
 
-        return img
+        return img, torch.tensor(hue)
 
     def __getitem__(self, index):
         # Explicitly retrieve image and label from self.data and self.targets.
@@ -65,7 +75,7 @@ class ColourMNIST(datasets.MNIST):
         label = self.targets[index]
 
         # Set image hue
-        img = self._colourise(img, label)
+        img, hue = self._colourise(img, label)
 
         # Apply the transform if provided
         # (e.g., convert to tensor, normalization, etc.)
@@ -74,17 +84,19 @@ class ColourMNIST(datasets.MNIST):
         else:
             img = transforms.ToTensor()(img)
 
-        return img, label
+        return img, label, hue
 
 
 class PairedColourMNIST(ColourMNIST):
-    def __init__(self, *args, sigma: float = 0.05, p: float = 0.01, **kwargs):
+    def __init__(self, *args, paired: bool = True, view: bool = False, **kwargs):
         """
         Args:
             sigma (float): Standard deviation for Normal distribution.
             p (float): Probability for sampling from Uniform instead of Normal.
         """
-        super().__init__(*args, sigma=sigma, p=p, **kwargs)
+        super().__init__(*args, **kwargs)
+        self.paired = paired
+        self.view = view
         # Build mapping from label to list of indices
         self.label_to_indices = {}
         for label in range(0, 10):
@@ -98,22 +110,50 @@ class PairedColourMNIST(ColourMNIST):
         img1 = self.data[index]
         label = self.targets[index]
 
-        # Form image pairs by getting another image with the same label.
-        indices = self.label_to_indices[int(label)]
-        img2_idx = int(np.random.choice(indices))
-        img2 = self.data[img2_idx]
-
         # Set image hue
-        img1 = self._colourise(img1, label)
-        img2 = self._colourise(img2, label)
+        cimg1, hue1 = self._colourise(img1, label)
+        if self.view:
+            # View Augmentation - same image different colour
+            cimg2, hue2 = self._colourise(img1, label)
+        else:
+            # Form image pairs by getting another image with the same label.
+            indices = self.label_to_indices[int(label)]
+            img2_idx = int(np.random.choice(indices))
+            img2 = self.data[img2_idx]
+            # Data Augmentation - different image with same label different colour
+            cimg2, hue2 = self._colourise(img2, label)
 
         # Apply the transform if provided
         # (e.g., convert to tensor, normalization, etc.)
         if self.transform is not None:
-            img1 = self.transform(img1)
-            img2 = self.transform(img2)
+            cimg1 = self.transform(cimg1)
+            cimg2 = self.transform(cimg2)
         else:
-            img1 = transforms.ToTensor()(img1)
-            img2 = transforms.ToTensor()(img2)
+            cimg1 = transforms.ToTensor()(cimg1)
+            cimg2 = transforms.ToTensor()(cimg2)
 
-        return img1, img2, label
+        if self.paired:
+            return (
+                label.reshape(
+                    1,
+                ),
+                (
+                    hue1.reshape(
+                        1,
+                    ),
+                    hue2.reshape(
+                        1,
+                    ),
+                ),
+                (cimg1, cimg2),
+            )
+        else:
+            return (
+                label.reshape(
+                    1,
+                ),
+                hue1.reshape(
+                    1,
+                ),
+                cimg1,
+            )
