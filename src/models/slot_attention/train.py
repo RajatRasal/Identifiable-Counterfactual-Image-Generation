@@ -7,17 +7,14 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn.functional as F
-from ema_pytorch import EMA
 from torch import nn
 from torch.optim import Adam
-from torchmetrics.aggregation import MeanMetric
-from torchmetrics.functional.image.lpips import _NoTrainLpips
-from torchmetrics.image.fid import FrechetInceptionDistance
 from tqdm import tqdm
 
 from datasets.mixer import mixer
 from models.slot_attention.model import SlotAttentionAutoEncoder
+from models.utils.metrics import all_metrics
+from models.utils.wrapper import SlotAEWrapper
 
 
 def display_slots(image, recon_combined, recons, masks, slots, savefig, num_slots):
@@ -85,10 +82,14 @@ def argparser():
         "--num_epochs",
         default=1000,
         type=int,
-        help="number of workers for loading data",
+        help="max number of epochs for training",
     )
-    parser.add_argument("--ema_rate", default=0.9999, type=float, help="ema decay rate")
-    parser.add_argument("--cache", action="store_true", help="caching the dataset")
+    parser.add_argument(
+        "--max_iters",
+        default=100000,
+        type=int,
+        help="max number of iterations for training",
+    )
     opt = parser.parse_args()
     return opt
 
@@ -101,21 +102,22 @@ def train():
     torch.manual_seed(opt.seed)
     np.random.seed(opt.seed)
 
-    model_dir = f"{opt.model_dir}_{opt.dataset}_{opt.seed}"
+    model_dir = opt.model_dir
     os.makedirs(model_dir, exist_ok=True)
     images_dir = f"{model_dir}/images"
     os.makedirs(images_dir, exist_ok=True)
-    ema_dir = f"{model_dir}/ema"
-    os.makedirs(ema_dir, exist_ok=True)
     ckpt_dir = f"{model_dir}/model"
     os.makedirs(ckpt_dir, exist_ok=True)
+
+    with open(f"{model_dir}/hparams.json", "w") as f:
+        json.dump(vars(opt), f)
 
     dl_train, dl_test = mixer(
         opt.dataset,
         opt.batch_size,
         opt.num_workers,
         opt.resolution,
-        opt.cache,
+        True,
     )
     model = SlotAttentionAutoEncoder(
         (opt.resolution, opt.resolution),
@@ -123,8 +125,6 @@ def train():
         opt.num_iterations,
         opt.hid_dim,
     ).to(device)
-    ema_model = EMA(model, beta=opt.ema_rate, update_every=1)
-    ema_model.to(device)
 
     optimizer = Adam(model.parameters(), lr=opt.learning_rate)
 
@@ -133,12 +133,13 @@ def train():
     # Train
     start = time.time()
     i = 0
+    # TODO: train for 100K iterations?
     for epoch in range(opt.num_epochs):
         model.train()
 
         total_loss = 0
 
-        for sample in tqdm(dl_train):
+        for batch, sample in enumerate(tqdm(dl_train)):
             i += 1
 
             if i < opt.warmup_steps:
@@ -160,58 +161,28 @@ def train():
             loss.backward()
             optimizer.step()
 
-            ema_model.update()
-
         total_loss /= len(dl_train)
 
         end = datetime.timedelta(seconds=time.time() - start)
         print("Epoch: {}, Loss: {}, Time: {}".format(epoch, total_loss, end))
 
-        if not epoch % 50:
+        if not epoch % 5:
             torch.save(
                 {"model_state_dict": model.state_dict()}, f"{ckpt_dir}/{epoch}.ckpt"
             )
-            torch.save(
-                {"model_state_dict": ema_model.state_dict()}, f"{ema_dir}/{epoch}.ckpt"
-            )
 
-        if not epoch % 10:
+        if not epoch % 5:
             with torch.no_grad():
                 sample = next(iter(dl_test))
                 test_img = sample[0].unsqueeze(0).to(device)
-                outs = ema_model(test_img)
+                outs = model(test_img)
                 display_slots(
                     test_img, *outs, f"{images_dir}/{epoch}.png", opt.num_slots
                 )
 
+        if i > opt.max_iter:
+            break
+
     # Test
-    fid = FrechetInceptionDistance(
-        feature=2048,
-        input_img_size=(3, opt.resolution, opt.resolution),
-        normalize=True,
-        compute_on_cpu=False,
-    ).to(device)
-    mse_mean = MeanMetric().to(device=device)
-    lpips = _NoTrainLpips(net="vgg").to(device=device)
-    lpips_mean = MeanMetric().to(device=device)
-    for sample in tqdm(dl_test):
-        image = sample.to(device)
-        recon_combined, _, masks, _ = ema_model(image)
-        # MSE
-        mse_score = F.mse_loss(image, recon_combined, reduction="none")
-        mse_score = mse_score.view(image.size(0), -1).mean(dim=1)
-        mse_mean.update(mse_score)
-        # FID
-        fid.update(image, real=True)
-        fid.update(recon_combined, real=False)
-        # LPIPS
-        lpips_score = lpips(image, recon_combined).view(image.size(0), 1)
-        lpips_mean.update(lpips_score)
-    metrics = {
-        "fid": fid.compute().item(),
-        "lpips": lpips_mean.compute().item(),
-        "mse": mse_mean.compute().item(),
-    }
-    print(metrics)
-    with open(f"{model_dir}/metrics.csv", "w") as f:
-        json.dump(metrics, f)
+    wrapper = SlotAEWrapper(model)
+    all_metrics(wrapper, dl_test, opt.resolution, device, model_dir)

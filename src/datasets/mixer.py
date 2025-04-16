@@ -77,15 +77,15 @@ def mixer(
 
 if __name__ == "__main__":
     datasets = [
-        "arrowroom",
+        # "arrowroom",
         "shapes3d",
-        "bitmoji",
-        "celeba",
-        "shapestack",
-        "clevr6",
-        "arrowroom",
-        "clevrtex",
-        "objectsroom",
+        # "bitmoji",
+        # "celeba",
+        # "shapestack",
+        # "clevr6",
+        # "arrowroom",
+        # "clevrtex",
+        # "objectsroom",
     ]
     for dataset in datasets:
         print(dataset)
